@@ -13,6 +13,16 @@ class StdoutRedirector {
   private var stderrPipe: [Int32] = [-1, -1]
   private var stdoutReadSource: DispatchSourceRead?
   private var stderrReadSource: DispatchSourceRead?
+
+  /// Whether a line captured from the pipe is an os_log record the OS
+  /// mirrored back to stderr (OS_ACTIVITY_DT_MODE) rather than real process
+  /// output. Mirrored lines carry the "<process>[<pid>:" header; older
+  /// releases prefix them with "OSLOG-". They must go to the original fd
+  /// untouched — re-logging them through os_log mirrors them back into the
+  /// pipe and deadlocks the reader once the pipe buffer fills.
+  static func isMirroredLogLine(_ line: String) -> Bool {
+    line.hasPrefix("OSLOG-") || line.contains("[\(getpid()):")
+  }
     
   func start() {
     originalStdout = dup(STDOUT_FILENO)
@@ -66,7 +76,7 @@ class StdoutRedirector {
         let trimmed = output.trimmingCharacters(in: .newlines)
         if !trimmed.isEmpty {
           // we're sending stderr to oslog, so we need to avoid recursive calls
-          if trimmed.hasPrefix("OSLOG-") {
+          if StdoutRedirector.isMirroredLogLine(trimmed) {
             // make sure the system can parse the oslogs
             write(writeToOriginal, &buffer, bytesRead)
           } else {
